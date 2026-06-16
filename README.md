@@ -28,7 +28,7 @@ English | [中文](README_CN.md) | [日本語](README_JA.md)
 > - 🔄 **Auto-rebase upgrades** — a daily CI rebases this patch onto the latest upstream tag and republishes the Docker image. You just `docker compose pull`.
 > - 🛡️ **Preserves OAuth TLS fingerprinting** — tracing happens in-process, so the utls fingerprint to Anthropic is untouched.
 >
-> 👉 **Quick start:** [docs/LANGFUSE.md](docs/LANGFUSE.md) · **Image:** `ghcr.io/rxho/sub2api-langfuse:latest`
+> 👉 **Quick start:** [docs/LANGFUSE.md](docs/LANGFUSE.md) · **Image:** `ghcr.io/rxho/sub2api:latest`
 >
 > *Fork of [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api).*
 
