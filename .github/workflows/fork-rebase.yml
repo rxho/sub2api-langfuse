@@ -1,0 +1,120 @@
+# 自动把 langfuse-patch 分支 rebase 到上游 Wei-Shaw/sub2api 最新 release tag 上。
+#
+# 触发：每日定时（UTC 02:00）+ 手动 workflow_dispatch。
+# 成功 → 强推 langfuse-patch（触发 fork-release.yml 出镜像）。
+# 失败（冲突）→ 开 issue 提醒手动解决。
+#
+# 前提：fork 仓库有一个长期分支 `langfuse-patch`，包含 langfuse 装饰器改动，
+# 且该分支的改动相对上游是"纯新增/最小替换"，rebase 冲突概率极低。
+name: fork-rebase
+
+on:
+  schedule:
+    # 每日 UTC 02:00（北京时间 10:00）
+    - cron: "0 2 * * *"
+  workflow_dispatch: # 允许手动触发
+
+permissions:
+  contents: write # 强推分支需要
+  issues: write   # 开冲突 issue 需要
+
+env:
+  UPSTREAM: "Wei-Shaw/sub2api"
+  PATCH_BRANCH: "langfuse-patch"
+  BASE_BRANCH: "main"
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork (patch branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0 # 完整历史，rebase 需要
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch tags
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream --tags --no-recurse-submodules
+
+      - name: Resolve latest upstream tag
+        id: latest
+        run: |
+          # 取上游最新的稳定 release tag（按版本号排序）
+          LATEST_TAG=$(git tag -l --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "::warning::No upstream version tags found"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream tag: $LATEST_TAG"
+
+      - name: Check if already rebased
+        id: check
+        if: steps.latest.outputs.skip != 'true'
+        run: |
+          # 如果 patch 分支的 HEAD 已经包含该 tag 的提交，则跳过
+          if git merge-base --is-ancestor "${{ steps.latest.outputs.tag }}" HEAD; then
+            echo "already on ${{ steps.latest.outputs.tag }}, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebase patch onto upstream tag
+        id: rebase
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          set +e
+          git rebase --onto "${{ steps.latest.outputs.tag }}" \
+            "$(git merge-base HEAD upstream/${BASE_BRANCH} 2>/dev/null || echo HEAD~20)" \
+            HEAD
+          STATUS=$?
+          set -e
+          if [ $STATUS -ne 0 ]; then
+            echo "rebase_failed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Rebase conflict detected"
+            git rebase --abort || true
+            exit 0
+          fi
+          echo "rebase_failed=false" >> "$GITHUB_OUTPUT"
+
+      - name: Create conflict issue
+        if: steps.rebase.outputs.rebase_failed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.latest.outputs.tag }}';
+            const date = new Date().toISOString().slice(0,10);
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Rebase conflict: langfuse-patch ↔ upstream ${tag} (${date})`,
+              body: [
+                `自动 rebase \`langfuse-patch\` 到上游 \`${tag}\` 时发生冲突。`,
+                '',
+                '**处理步骤：**',
+                '1. 本地 `git fetch upstream --tags`',
+                `2. \`git checkout langfuse-patch\``,
+                `3. \`git rebase ${tag}\``,
+                '4. 解决冲突（通常只在 wire_gen.go / update_service.go）',
+                '5. `git push --force-with-origin langfuse-patch`',
+                '',
+                '冲突文件列表见 Actions 日志。本 issue 可在修复后关闭。'
+              ].join('\n'),
+              labels: ['rebase-conflict']
+            });
+
+      - name: Force-push rebased branch
+        if: steps.rebase.outputs.rebase_failed != 'true' && steps.check.outputs.skip != 'true'
+        run: |
+          git push --force-with-lease origin ${{ env.PATCH_BRANCH }}
+          echo "Pushed rebased langfuse-patch onto ${{ steps.latest.outputs.tag }}"
