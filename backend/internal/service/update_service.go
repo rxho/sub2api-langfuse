@@ -28,7 +28,9 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	// githubRepo 默认指向官方仓库。Fork 维护者可通过环境变量 UPDATE_GITHUB_REPO
+	// 覆盖为 "yourname/sub2api"，使后台"检查更新"指向自己的 fork。
+	githubRepo = "Wei-Shaw/sub2api"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -37,6 +39,16 @@ const (
 	// Security: max download size (500MB)
 	maxDownloadSize = 500 * 1024 * 1024
 )
+
+// resolvedGithubRepo 是运行时实际使用的仓库（可被 UPDATE_GITHUB_REPO 覆盖）。
+// fetchLatestRelease 用它替代 githubRepo 常量，使 fork 能指向自己的 release。
+var resolvedGithubRepo = githubRepo
+
+func init() {
+	if v := strings.TrimSpace(os.Getenv("UPDATE_GITHUB_REPO")); v != "" {
+		resolvedGithubRepo = v
+	}
+}
 
 // UpdateCache defines cache operations for update service
 type UpdateCache interface {
@@ -280,7 +292,7 @@ func (s *UpdateService) Rollback() error {
 }
 
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	release, err := s.githubClient.FetchLatestRelease(ctx, resolvedGithubRepo)
 	if err != nil {
 		return nil, err
 	}

@@ -16,6 +16,24 @@ English | [中文](README_CN.md) | [日本語](README_JA.md)
 
 </div>
 
+---
+
+> ## 🔭 This Fork: `sub2api-langfuse`
+>
+> A **non-invasive fork** of Sub2API with built-in **Langfuse LLM Call tracing** — every upstream LLM call (including OAuth subscription accounts talking directly to Anthropic) is captured and reported to your **self-hosted Langfuse**, with **zero changes to business logic**.
+>
+> **Why this fork over upstream?**
+> - 🔍 **Real LLM Call trace, not session trace** — model, full input/output, token usage, latency, account/proxy/group dimensions, HTTP status, one generation per upstream attempt (including failed failover tries).
+> - 🧩 **Zero business-code intrusion** — the decorator wraps the `HTTPUpstream` interface only; `LANGFUSE_ENABLED=false` falls back to the upstream binary with zero overhead.
+> - 🔄 **Auto-rebase upgrades** — a daily CI rebases this patch onto the latest upstream tag and republishes the Docker image. You just `docker compose pull`.
+> - 🛡️ **Preserves OAuth TLS fingerprinting** — tracing happens in-process, so the utls fingerprint to Anthropic is untouched.
+>
+> 👉 **Quick start:** [docs/LANGFUSE.md](docs/LANGFUSE.md) · **Image:** `ghcr.io/rxho/sub2api-langfuse:latest`
+>
+> *Fork of [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api).*
+
+---
+
 ## ⚠️ Important Notice
 
 Please read the following carefully before using this project:

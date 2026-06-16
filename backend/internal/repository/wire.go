@@ -139,7 +139,10 @@ var ProviderSet = wire.NewSet(
 	NewProxyExitInfoProber,
 	NewClaudeUsageFetcher,
 	NewClaudeOAuthClient,
-	NewHTTPUpstream,
+	// Langfuse trace 上报（非侵入装饰 HTTPUpstream；配置未启用时透传原始实现）
+	ProvideLangfuseConfig,
+	ProvideLangfuseClient,
+	ProvideHTTPUpstream, // 替换 NewHTTPUpstream，所有依赖 service.HTTPUpstream 的服务自动获得装饰
 	NewOpenAIOAuthClient,
 	NewGrokOAuthClient,
 	NewGeminiOAuthClient,

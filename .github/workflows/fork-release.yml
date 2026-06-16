@@ -1,0 +1,85 @@
+# 在 langfuse-patch 分支推送时：构建 Docker 镜像并推送到 ghcr.io。
+#
+# 产出镜像：
+#   ghcr.io/<owner>/sub2api:latest           ← 滚动 tag，docker compose pull 拉这个
+#   ghcr.io/<owner>/sub2api:<short-sha>      ← 精确版本，可回滚
+#
+# 镜像内嵌 langfuse 装饰器（随 langfuse-patch 分支源码编译）。
+# 升级流程：fork-rebase.yml 自动 rebase → 触发本 workflow → 新镜像 → 机器上 docker compose pull。
+name: fork-release
+
+on:
+  push:
+    branches: [langfuse-patch]
+  workflow_dispatch: # 允许手动触发构建
+
+permissions:
+  contents: read
+  packages: write # 推 ghcr 需要写 packages
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 取版本号需要
+
+      - name: Resolve version
+        id: ver
+        run: |
+          # 版本号 = 上游最近 tag + -langfuse + 短 sha
+          UPSTREAM_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="${UPSTREAM_TAG}-langfuse.${SHORT_SHA}"
+          # 小写 owner（ghcr 镜像名必须小写）
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/sub2api"
+          {
+            echo "version=${VERSION}"
+            echo "image=${IMAGE}"
+            echo "owner_lc=${OWNER_LC}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building ${IMAGE}:${VERSION}"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # 内置 token，免额外配置
+
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.ver.outputs.image }}:latest
+            ${{ steps.ver.outputs.image }}:${{ steps.ver.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### 镜像已发布" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "版本：\`${{ steps.ver.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "拉取：" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ${{ steps.ver.outputs.image }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "在 docker-compose.yml 中：\`image: ${{ steps.ver.outputs.image }}:latest\`" >> "$GITHUB_STEP_SUMMARY"
