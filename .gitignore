@@ -140,3 +140,6 @@ docs/*
 frontend/coverage/
 aicodex
 output/
+
+# local tool state
+.omx/
