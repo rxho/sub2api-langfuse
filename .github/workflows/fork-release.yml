@@ -71,6 +71,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+
+      - name: Set package to public
+        run: |
+          gh api -X PATCH "/user/packages/container/sub2api" \
+            -H "Accept: application/vnd.github+json" \
+            -f visibility=public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Summary
         run: |
           echo "### 镜像已发布" >> "$GITHUB_STEP_SUMMARY"
