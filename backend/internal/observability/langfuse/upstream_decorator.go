@@ -26,7 +26,7 @@ var _ service.HTTPUpstream = (*langfuseUpstream)(nil)
 
 // NewDecorator 用 Langfuse 装饰器包裹原始 HTTPUpstream。
 // 返回值可直接替换 wire 中的 NewHTTPUpstream。
-func NewDecorator(inner service.HTTPUpstream, client *Client, cfg *Config) service.HTTPUpstream {
+func NewDecorator(inner service.HTTPUpstream, client EventEnqueuer, cfg *Config) service.HTTPUpstream {
 	return &langfuseUpstream{
 		inner:  inner,
 		client: client,
@@ -34,9 +34,16 @@ func NewDecorator(inner service.HTTPUpstream, client *Client, cfg *Config) servi
 	}
 }
 
+// EventEnqueuer 是 langfuseUpstream 对上报客户端的最小依赖（仅 Enqueue）。
+// 抽成接口便于在不启动后台 flush 的情况下做单测。
+// *Client 天然实现该接口。
+type EventEnqueuer interface {
+	Enqueue(events ...Event)
+}
+
 type langfuseUpstream struct {
 	inner  service.HTTPUpstream
-	client *Client
+	client EventEnqueuer
 	cfg    *Config
 }
 
@@ -90,15 +97,19 @@ func (u *langfuseUpstream) intercept(req *http.Request, accountID int64, call fu
 	}
 
 	traceID := uuid.NewString()
+	input := decodeInput(inputBytes)
 	metadata := buildRequestMetadata(ctx, accountIDStr, proxyFromReq(req), model)
 
-	// 上报 trace-create（先于 generation，建立 trace 骨架）
+	// 上报 trace-create（先于 generation，建立 trace 骨架）。
+	// Input 在此填入（请求体已在手）；Output 待响应解析后用 trace-update 回填，
+	// 这样 Langfuse 的 preview/overview 标签页能直接展示 input/output。
 	u.client.Enqueue(Event{
 		Type: "trace-create",
 		Body: traceBody{
 			ID:       traceID,
 			Name:     "sub2api.upstream",
 			UserID:   "account:" + accountIDStr,
+			Input:    input,
 			Metadata: metadata,
 		},
 	})
@@ -132,7 +143,6 @@ func (u *langfuseUpstream) intercept(req *http.Request, accountID int64, call fu
 		inner:      resp.Body,
 		maxCapture: u.cfg.CaptureMaxBytes,
 		onClose: func(captured []byte) {
-			input := decodeInput(inputBytes)
 			gen := u.parseAndBuild(traceID, captured, isStream, contentType, generationInput{
 				Model:      model,
 				Input:      input,
@@ -142,6 +152,17 @@ func (u *langfuseUpstream) intercept(req *http.Request, accountID int64, call fu
 				StatusCode: resp.StatusCode,
 			})
 			u.client.Enqueue(gen)
+			// 回填 trace 的 Output（trace-create 时只有 Input）。
+			// 使 preview/overview 标签页能直接展示完整 I/O。
+			if gb, ok := gen.Body.(generationBody); ok && gb.Output != nil {
+				u.client.Enqueue(Event{
+					Type: "trace-update",
+					Body: traceBody{
+						ID:     traceID,
+						Output: gb.Output,
+					},
+				})
+			}
 		},
 	}
 	resp.Body = cap
@@ -387,11 +408,15 @@ func parseAnthropicSSE(captured []byte) (*usageBody, any) {
 
 // ============================ 事件构造 ============================
 
-// traceBody 对应 trace-create 的 body。
+// traceBody 对应 trace-create / trace-update 的 body。
+// trace-create 时填 Input（请求体在手）；Output 留空，待响应解析完后
+// 通过 trace-update 事件回填，使 Langfuse preview/overview 标签页能直接展示 I/O。
 type traceBody struct {
 	ID       string         `json:"id"`
 	Name     string         `json:"name"`
 	UserID   string         `json:"userId,omitempty"`
+	Input    any            `json:"input,omitempty"`
+	Output   any            `json:"output,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
