@@ -118,3 +118,52 @@ jobs:
         run: |
           git push --force-with-lease origin ${{ env.PATCH_BRANCH }}
           echo "Pushed rebased langfuse-patch onto ${{ steps.latest.outputs.tag }}"
+
+      # rebase 成功并强推后，在 fork 上打与上游相同的 tag 并发 GitHub Release。
+      # 这样 dashboard 的「检查更新 / 查看更新日志」会指向 fork 自己的 release，
+      # 而不是回退到上游。Release body 复用上游 changelog + 追加 fork 镜像信息。
+      # 幂等：若该 tag 的 release 已存在则跳过。
+      - name: Tag and release on fork
+        if: steps.rebase.outputs.rebase_failed != 'true' && steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.latest.outputs.tag }}
+          UPSTREAM: ${{ env.UPSTREAM }}
+        run: |
+          set -e
+          # 1. fork 上该 tag 的 release 已存在则跳过（避免重复发）
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists on fork, skipping"
+            exit 0
+          fi
+
+          # 2. 拉上游该 tag 的 release body（失败则用占位）
+          UPSTREAM_BODY="$(gh api "/repos/${UPSTREAM}/releases/tags/${TAG}" --jq '.body // "" 2>/dev/null || true')"
+          if [ -z "$UPSTREAM_BODY" ]; then
+            UPSTREAM_BODY="（上游 ${TAG} 暂无 release notes）"
+          fi
+
+          # 3. 拼接 fork 镜像信息头 + 上游 changelog
+          NOTES_FILE="$(mktemp)"
+          {
+            echo "> 本 Fork（\`rxho/sub2api-langfuse\`）已自动 rebase 到上游 \`${TAG}\`，并集成 Langfuse LLM Call Trace。"
+            echo ">"
+            echo "> 🔭 **镜像**：\`ghcr.io/rxho/sub2api:latest\`（匿名可拉）  ·  🛡️ 保留 OAuth TLS 指纹  ·  🔄 每日 CI 自动跟进上游"
+            echo ""
+            echo "---"
+            echo ""
+            echo "以下为上游 ${TAG} 的更新日志："
+            echo ""
+            printf '%s\n' "$UPSTREAM_BODY"
+          } > "$NOTES_FILE"
+
+          # 4. 发 release 标记 latest。
+          #    gh release create 会在远端 PATCH_BRANCH HEAD 上自动创建对应 tag，
+          #    无需本地 git tag + push（避免本地/远端 tag 冲突）。
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${PATCH_BRANCH}" \
+            --title "Sub2API ${TAG#v}-langfuse" \
+            --notes-file "$NOTES_FILE" \
+            --latest
+          echo "Created release ${TAG} on fork"
