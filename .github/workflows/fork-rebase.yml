@@ -156,8 +156,10 @@ jobs:
             exit 0
           fi
 
-          # 2. 拉上游该 tag 的 release body（失败则用占位）
-          UPSTREAM_BODY="$(gh api "/repos/${UPSTREAM}/releases/tags/${TAG}" --jq '.body // "" 2>/dev/null || true')"
+          # 2. 拉上游该 tag 的 release body（失败则用占位）。
+          #    注意：`2>/dev/null || true` 必须放在单引号 --jq 表达式**之外**，
+          #    否则会被 jq 当作表达式的一部分并解析失败。
+          UPSTREAM_BODY="$(gh api "/repos/${UPSTREAM}/releases/tags/${TAG}" --jq '.body // ""' 2>/dev/null || true)"
           if [ -z "$UPSTREAM_BODY" ]; then
             UPSTREAM_BODY="（上游 ${TAG} 暂无 release notes）"
           fi
