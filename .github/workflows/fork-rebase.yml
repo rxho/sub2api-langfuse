@@ -132,12 +132,18 @@ jobs:
           git push --force-with-lease origin ${{ env.PATCH_BRANCH }}
           echo "Pushed rebased langfuse-patch onto ${{ steps.latest.outputs.tag }}"
 
-      # rebase 成功并强推后，在 fork 上打与上游相同的 tag 并发 GitHub Release。
-      # 这样 dashboard 的「检查更新 / 查看更新日志」会指向 fork 自己的 release，
-      # 而不是回退到上游。Release body 复用上游 changelog + 追加 fork 镜像信息。
-      # 幂等：若该 tag 的 release 已存在则跳过。
+      # 在 fork 上打与上游相同的 tag 并发 GitHub Release。这样 dashboard
+      # 的「检查更新 / 查看更新日志」会指向 fork 自己的 release，而不是回退到上游。
+      # Release body 复用上游 changelog + 追加 fork 镜像信息。
+      #
+      # 触发条件（故意不受 steps.check.skip 约束）：
+      #   1. 未发生 rebase 冲突。
+      #   2. 找到了上游最新 tag（steps.latest.outputs.skip != 'true'）。
+      # 这样即便本次 rebase 被跳过（例如作者本地手动解决完冲突再 force-push
+      # 后触发的 workflow_dispatch），只要 fork 上还没有该 tag 的 release，
+      # 本步骤仍会补发一次；`gh release view` 检查保证幂等。
       - name: Tag and release on fork
-        if: steps.rebase.outputs.rebase_failed != 'true' && steps.check.outputs.skip != 'true'
+        if: steps.latest.outputs.skip != 'true' && steps.rebase.outputs.rebase_failed != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.latest.outputs.tag }}
