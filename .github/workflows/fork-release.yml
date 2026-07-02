@@ -34,12 +34,44 @@ jobs:
         run: |
           # 版本号保持与上游 tag 完全一致，避免 sub2api 的 parseVersion
           # 把 "-langfuse.xxx" 当成预发布后缀而误判"有新版本可用"。
-          # fork 差异信息通过镜像 tag（:v0.1.137-langfuse.<sha>）和 ldflags COMMIT 区分。
-          UPSTREAM_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
+          # fork 差异信息通过镜像 tag（:v0.1.143-langfuse.<sha>）和 ldflags COMMIT 区分。
+          #
+          # 为什么不能直接 `git describe --tags`：
+          #   CI checkout 只包含 origin（fork）的 tags，不含 upstream 的 v* tag。
+          #   fork 上历史遗留的 v0.1.137/v0.1.139 tag 可能指向被 rebase 抛弃的
+          #   旧 commit，或是滞后于 HEAD 实际所在的 upstream 版本。
+          #   → describe 会挑到过时的 fork tag，导致镜像 tag & 二进制 VERSION
+          #     漂移，dashboard 又会红点报"有新版"。
+          #
+          # 解决：把上游 tags 拉到独立 refs/upstream-tags/ 命名空间（避免
+          # 与 fork 同名 tag 撞名 "would clobber"），从高到低找出 HEAD 的
+          # 最近 upstream vX.Y.Z 祖先 tag 作为版本号来源。
+          git remote add upstream "https://github.com/Wei-Shaw/sub2api.git" 2>/dev/null || true
+          git fetch upstream --no-recurse-submodules --prune \
+            '+refs/tags/*:refs/upstream-tags/*'
+
+          UPSTREAM_TAG=""
+          while IFS= read -r ref; do
+            [ -z "$ref" ] && continue
+            commit="$(git rev-parse "${ref}^{commit}" 2>/dev/null || true)"
+            [ -z "$commit" ] && continue
+            if git merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
+              UPSTREAM_TAG="${ref#refs/upstream-tags/}"
+              break
+            fi
+          done < <(git for-each-ref --sort=-v:refname \
+            --format='%(refname)' refs/upstream-tags/ | \
+            grep -E 'refs/upstream-tags/v[0-9]+\.[0-9]+\.[0-9]+$')
+
+          if [ -z "$UPSTREAM_TAG" ]; then
+            echo "::warning::no upstream v* ancestor tag found, falling back to v0.0.0"
+            UPSTREAM_TAG="v0.0.0"
+          fi
+
           SHORT_SHA=$(git rev-parse --short HEAD)
           # 注入到二进制的 version 字段。去掉前导 "v" 以匹配上游 VERSION 文件格式
           # （上游官方镜像同样不带 v）。前端 VersionBadge.vue 会硬编码拼 "v"，
-          # 若这里带 v 则显示成 "vv0.1.137"。去掉后前端拼出 "v0.1.137"。
+          # 若这里带 v 则显示成 "vv0.1.143"。去掉后前端拼出 "v0.1.143"。
           VERSION="${UPSTREAM_TAG#v}"
           # 镜像 tag 带 fork 标识，便于回溯具体构建
           IMAGE_TAG="${UPSTREAM_TAG}-langfuse.${SHORT_SHA}"
