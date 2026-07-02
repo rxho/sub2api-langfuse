@@ -42,27 +42,40 @@ jobs:
       - name: Add upstream remote and fetch tags
         run: |
           git remote add upstream "https://github.com/${UPSTREAM}.git"
-          git fetch upstream --tags --no-recurse-submodules
+          # 把上游 tags 拉到独立的 refs/upstream-tags/ 命名空间，避免与 fork
+          # 上通过 `gh release create` 产生的同名 tag（指向 rebase 后的 commit）
+          # 冲突而导致 `git fetch --tags` 报 "would clobber existing tag" 退出 1。
+          # 参考事故：run 28568852559（上游 v0.1.139 与 fork v0.1.139 同名不同 commit）
+          git fetch upstream --no-recurse-submodules --prune \
+            '+refs/tags/*:refs/upstream-tags/*' \
+            "${BASE_BRANCH}"
 
       - name: Resolve latest upstream tag
         id: latest
         run: |
-          # 取上游最新的稳定 release tag（按版本号排序）
-          LATEST_TAG=$(git tag -l --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-          if [ -z "$LATEST_TAG" ]; then
+          # 从独立命名空间取上游最新的稳定 release tag（按版本号排序）
+          LATEST_REF=$(git for-each-ref --sort=-v:refname \
+            --format='%(refname)' refs/upstream-tags/ | \
+            grep -E 'refs/upstream-tags/v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$LATEST_REF" ]; then
             echo "::warning::No upstream version tags found"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          LATEST_TAG="${LATEST_REF#refs/upstream-tags/}"
           echo "tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-          echo "Latest upstream tag: $LATEST_TAG"
+          echo "ref=$LATEST_REF" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream tag: $LATEST_TAG ($LATEST_REF)"
 
       - name: Check if already rebased
         id: check
         if: steps.latest.outputs.skip != 'true'
         run: |
-          # 如果 patch 分支的 HEAD 已经包含该 tag 的提交，则跳过
-          if git merge-base --is-ancestor "${{ steps.latest.outputs.tag }}" HEAD; then
+          # 如果 patch 分支的 HEAD 已经包含该 tag 的提交，则跳过。
+          # 注意：必须用 refs/upstream-tags/<tag>（上游那个 commit），
+          # 而不是短名 <tag>（会解析到 fork 上同名 tag 指向的 rebase 后 commit，
+          # 使 is-ancestor 恒为真、永远跳过 rebase）。
+          if git merge-base --is-ancestor "${{ steps.latest.outputs.ref }}" HEAD; then
             echo "already on ${{ steps.latest.outputs.tag }}, skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
@@ -74,7 +87,7 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: |
           set +e
-          git rebase --onto "${{ steps.latest.outputs.tag }}" \
+          git rebase --onto "${{ steps.latest.outputs.ref }}" \
             "$(git merge-base HEAD upstream/${BASE_BRANCH} 2>/dev/null || echo HEAD~20)" \
             HEAD
           STATUS=$?
