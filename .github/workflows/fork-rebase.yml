@@ -107,10 +107,33 @@ jobs:
           script: |
             const tag = '${{ steps.latest.outputs.tag }}';
             const date = new Date().toISOString().slice(0,10);
+            const title = `Rebase conflict: langfuse-patch ↔ upstream ${tag} (${date})`;
+
+            // 去重：如果已有 open 的 rebase-conflict issue，就更新它
+            // 而不是每天开新的。这样 maintainer 不处理时不会堆积。
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'rebase-conflict',
+              per_page: 100
+            });
+            const dup = existing.find(i => i.title.includes(`upstream ${tag}`));
+            if (dup) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: dup.number,
+                body: `🔁 每日检查仍冲突（${date}）。上游 \`${tag}\` 尚未跟进。\n\n冲突文件列表见最新 Actions 日志。`
+              });
+              core.info(`Issue #${dup.number} already open for ${tag}, added comment instead of creating duplicate.`);
+              return;
+            }
+
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Rebase conflict: langfuse-patch ↔ upstream ${tag} (${date})`,
+              title,
               body: [
                 `自动 rebase \`langfuse-patch\` 到上游 \`${tag}\` 时发生冲突。`,
                 '',
